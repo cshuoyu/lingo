@@ -10,7 +10,7 @@ def _quote(value) -> str:
     return '"' + str(value).replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%').replace('$', '$$') + '"'
 
 
-def sync_schedule(cfg: Config) -> None:
+def sync_schedule(cfg: Config, *, start_current: bool = True) -> None:
     root = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'systemd/user'
     root.mkdir(parents=True, exist_ok=True)
     project = Path(__file__).resolve().parent
@@ -26,4 +26,4 @@ def sync_schedule(cfg: Config) -> None:
     run('daemon-reload')
     run('enable' if cfg.autostart else 'disable', 'lingo.timer', 'lingo-login.service')
     # Automatic updates run this session even when login startup is disabled.
-    run('restart' if cfg.update_mode != 'manual' or cfg.clock_enabled else 'stop', 'lingo.timer')
+    run('restart' if start_current and (cfg.update_mode != 'manual' or cfg.clock_enabled) else 'stop', 'lingo.timer')

@@ -291,7 +291,7 @@ def cmd_install(args: argparse.Namespace) -> None:
     from scheduler import sync_schedule
     cfg.autostart = not args.no_enable
     cfg.save()
-    sync_schedule(cfg)
+    sync_schedule(cfg, start_current=not args.no_enable)
     print("installed wallpaper schedule")
 
     # 7. warnings

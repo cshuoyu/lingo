@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import shutil
 import threading
@@ -19,7 +20,7 @@ from config import Collection, Config, State, cache_dir, config_dir
 from collection_ops import rename_collection, remove_collection, validate_name, copy_image
 from image_sources import API_SIZES, search as catalog_search
 from ddg_images import SIZES as DDG_SIZES, DdgImage, search as ddg_search
-from rotator import EXTS as IMAGE_EXTS, list_images
+from rotator import EXTS as IMAGE_EXTS, list_images, pick_random
 from wallpaper import compose_and_apply
 
 THUMB_W = 220
@@ -97,6 +98,9 @@ class LingoWindow(Adw.ApplicationWindow):
         )
         self._refresh_collections()
         self._refresh_browse()
+        keys = Gtk.EventControllerKey.new()
+        keys.connect("key-pressed", self._on_key_pressed)
+        self.add_controller(keys)
 
     # ---------- sidebar ----------
 
@@ -287,6 +291,16 @@ class LingoWindow(Adw.ApplicationWindow):
         import_folder_btn = Gtk.Button(label="Import folder…")
         import_folder_btn.connect("clicked", self._on_import_folder_clicked)
         bar.append(import_folder_btn)
+        for label, tooltip, callback in (
+            ("go-previous-symbolic", "Previous wallpaper (Alt+Left)", lambda _b: self._navigate_wallpaper(False)),
+            ("go-next-symbolic", "Next wallpaper (Alt+Right)", lambda _b: self._navigate_wallpaper(True)),
+            ("view-refresh-symbolic", "Refresh collection (Ctrl+R)", lambda _b: self._refresh_collections()),
+            ("folder-open-symbolic", "Open collection folder", self._open_collection_folder),
+        ):
+            button = Gtk.Button.new_from_icon_name(label)
+            button.set_tooltip_text(tooltip)
+            button.connect("clicked", callback)
+            bar.append(button)
 
         self.browse_label = Gtk.Label(label="", xalign=0)
         self.browse_label.add_css_class("dim-label")
@@ -398,18 +412,19 @@ class LingoWindow(Adw.ApplicationWindow):
 
     def _on_image_clicked(self, _btn: Gtk.Button, img_path: Path) -> None:
         coll = self.cfg.active()
-        self.state.push_recent(coll.name, img_path.name)
         try:
             compose_and_apply(self.cfg, self.state, img_path)
         except Exception as e:
             self._toast(f"apply failed: {e}")
             return
+        self.state.push_recent(coll.name, img_path.name)
+        self.state.last_rotation = dt.datetime.now().isoformat(timespec="seconds")
         self.state.save()
         self._toast(f"Applied {img_path.name}")
 
     def _on_delete_clicked(self, _btn: Gtk.Button, img_path: Path) -> None:
-        dialog = Adw.MessageDialog.new(self, "Delete wallpaper?", None)
-        dialog.set_body(f"“{img_path.name}” will be removed from disk.")
+        dialog = Adw.MessageDialog.new(self, "Move wallpaper to Trash?", None)
+        dialog.set_body(f"“{img_path.name}” will be moved to Trash.")
         dialog.add_response("cancel", "Cancel")
         dialog.add_response("delete", "Delete")
         dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
@@ -424,13 +439,13 @@ class LingoWindow(Adw.ApplicationWindow):
         if response != "delete":
             return
         try:
-            img_path.unlink()
-        except OSError as e:
+            Gio.File.new_for_path(str(img_path)).trash(None)
+        except (OSError, GLib.Error) as e:
             self._toast(f"Delete failed: {e}")
             return
-        for recent in self.state.recent.values():
-            if img_path.name in recent:
-                recent.remove(img_path.name)
+        recent = self.state.recent.get(self.cfg.active_collection, [])
+        if img_path.name in recent:
+            recent.remove(img_path.name)
         self.state.save()
         self._refresh_browse()
         self._refresh_collections()
@@ -557,6 +572,7 @@ class LingoWindow(Adw.ApplicationWindow):
         self.ddg_scroll.get_vadjustment().connect("value-changed", self._on_ddg_scroll)
         outer.append(self.ddg_scroll)
 
+        self._ddg_generation = 0
         self._ddg_items: list[tuple[Gtk.CheckButton, object]] = []
         self._ddg_vqd: str | None = None
         self._ddg_start = 0
@@ -566,7 +582,18 @@ class LingoWindow(Adw.ApplicationWindow):
         self._ddg_size_value = ""
         self._ddg_backend = "ddg"
 
+        controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        for label, active in (("Select all", True), ("Clear selection", False)):
+            button = Gtk.Button(label=label)
+            button.connect("clicked", self._select_search_results, active)
+            controls.append(button)
+        self.ddg_more = Gtk.Button(label="Load more")
+        self.ddg_more.set_sensitive(False)
+        self.ddg_more.connect("clicked", self._retry_or_load_more)
+        controls.append(self.ddg_more)
+        outer.append(controls)
         download_btn = Gtk.Button(label="Download selected")
+        self.ddg_download = download_btn
         download_btn.add_css_class("suggested-action")
         download_btn.connect("clicked", self._on_ddg_download_clicked)
         footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -609,6 +636,7 @@ class LingoWindow(Adw.ApplicationWindow):
             nxt = child.get_next_sibling()
             self.ddg_flow.remove(child)
             child = nxt
+        self._ddg_generation += 1
         self._ddg_items = []
         self._ddg_vqd = None
         self._ddg_start = 0
@@ -634,6 +662,7 @@ class LingoWindow(Adw.ApplicationWindow):
         if self._ddg_loading or not self._ddg_has_more:
             return
         self._ddg_loading = True
+        self.ddg_more.set_sensitive(False)
         self.ddg_spinner.start()
         self.ddg_status.set_label(f"searching… ({len(self._ddg_items)} so far)")
         query = self._ddg_query_text
@@ -641,28 +670,45 @@ class LingoWindow(Adw.ApplicationWindow):
         start = self._ddg_start
         vqd = self._ddg_vqd
         backend = self._ddg_backend
+        generation = self._ddg_generation
 
         def worker() -> None:
             try:
                 if backend == "bing":
                     results, has_more = bing_search(query, size=size, start=start)
-                    GLib.idle_add(self._ddg_append, results, vqd, has_more)
+                    GLib.idle_add(self._search_callback, generation, self._ddg_append, results, vqd, has_more)
                 elif backend in ("wallhaven", "commons"):
                     results, token, has_more = catalog_search(backend, query, size=size, token=vqd)
-                    GLib.idle_add(self._ddg_append, results, token, has_more)
+                    GLib.idle_add(self._search_callback, generation, self._ddg_append, results, token, has_more)
                 else:
                     results, new_vqd, has_more = ddg_search(
                         query, size=size, start=start, vqd=vqd
                     )
-                    GLib.idle_add(self._ddg_append, results, new_vqd, has_more)
+                    GLib.idle_add(self._search_callback, generation, self._ddg_append, results, new_vqd, has_more)
             except Exception as e:
-                GLib.idle_add(self._ddg_error, str(e))
+                GLib.idle_add(self._search_callback, generation, self._ddg_error, str(e))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _retry_or_load_more(self, _button) -> None:
+        self._ddg_has_more = True
+        self._ddg_load_next()
+
+    def _search_callback(self, generation, callback, *args) -> bool:
+        if generation == self._ddg_generation:
+            callback(*args)
+        return False
+
+    def _select_search_results(self, _button, active) -> None:
+        for check, _item in self._ddg_items:
+            check.set_active(active)
 
     def _ddg_error(self, msg: str) -> bool:
         self.ddg_spinner.stop()
         self._ddg_loading = False
+        self._ddg_has_more = False
+        self.ddg_more.set_sensitive(True)
+        self.ddg_more.set_label("Retry")
         self.ddg_status.set_label(f"error: {msg}")
         self._toast(f"Search failed: {msg}")
         return False
@@ -706,6 +752,9 @@ class LingoWindow(Adw.ApplicationWindow):
                 dim_lbl.add_css_class("dim-label")
                 card.append(dim_lbl)
 
+            if it.page_url:
+                source_link = Gtk.LinkButton.new_with_label(it.page_url, "Open source")
+                card.append(source_link)
             check = Gtk.CheckButton(label="Select")
             check.set_active(False)
             card.append(check)
@@ -714,6 +763,10 @@ class LingoWindow(Adw.ApplicationWindow):
             self._ddg_items.append((check, it))
             added += 1
 
+        if results and added == 0:
+            self._ddg_has_more = False
+        self.ddg_more.set_label("Load more")
+        self.ddg_more.set_sensitive(self._ddg_has_more)
         self._ddg_start += len(results) if results else 0
         total = len(self._ddg_items)
         if added == 0 and not has_more:
@@ -769,52 +822,78 @@ class LingoWindow(Adw.ApplicationWindow):
         self.ddg_spinner.start()
         self.ddg_status.set_label(f"downloading {len(chosen)}…")
 
+        self.ddg_download.set_sensitive(False)
+
         def worker() -> None:
-            import urllib.request
-            import urllib.parse
-            added = 0
-            dest.mkdir(parents=True, exist_ok=True)
-            headers = {
-                "User-Agent": (
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-                ),
-                "Referer": "https://duckduckgo.com/",
-            }
-            for it in chosen:
+            from downloads import download_image
+            added = skipped = failed = 0
+            last_error = ""
+            for item in chosen:
                 try:
-                    req = urllib.request.Request(it.image_url, headers=headers)
-                    with urllib.request.urlopen(req, timeout=30) as r:
-                        data = r.read()
-                    parsed = urllib.parse.urlparse(it.image_url)
-                    name = Path(parsed.path).name or "image"
-                    if "." not in name:
-                        name += ".jpg"
-                    h = hashlib.md5(it.image_url.encode()).hexdigest()[:8]
-                    stem = Path(name).stem[:60]
-                    suffix = Path(name).suffix.lower()
-                    if suffix not in IMAGE_EXTS:
-                        suffix = ".jpg"
-                    target = dest / f"{stem}-{h}{suffix}"
-                    if target.exists():
-                        continue
-                    tmp = target.with_suffix(target.suffix + ".part")
-                    tmp.write_bytes(data)
-                    tmp.replace(target)
-                    added += 1
-                except Exception:
-                    continue
-            GLib.idle_add(self._ddg_download_done, added, dest_name)
+                    if download_image(item, dest) is None:
+                        skipped += 1
+                    else:
+                        added += 1
+                except Exception as e:
+                    failed += 1
+                    last_error = str(e)
+            GLib.idle_add(self._ddg_download_done, added, skipped, failed, last_error, dest_name)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _ddg_download_done(self, added: int, dest_name: str) -> bool:
+    def _ddg_download_done(self, added, skipped, failed, error, dest_name) -> bool:
         self.ddg_spinner.stop()
-        self.ddg_status.set_label(f"added {added} to {dest_name}")
-        self._toast(f"Added {added} to {dest_name}")
+        self.ddg_download.set_sensitive(True)
+        message = f"Added {added} to {dest_name}; {skipped} already saved; {failed} failed"
+        self.ddg_status.set_label(message)
+        self.ddg_status.set_tooltip_text(error or message)
+        self._toast(message + (f": {error}" if failed else ""))
         self._refresh_collections()
         if dest_name == self.cfg.active_collection:
             self._refresh_browse()
+        return False
+
+    def _open_collection_folder(self, _button) -> None:
+        try:
+            folder = self.cfg.active().path
+            folder.mkdir(parents=True, exist_ok=True)
+            Gtk.UriLauncher.new(folder.as_uri()).launch(self, None, self._folder_opened)
+        except (OSError, GLib.Error) as e:
+            self._toast(str(e))
+
+    def _folder_opened(self, launcher, result) -> None:
+        try:
+            launcher.launch_finish(result)
+        except GLib.Error as e:
+            self._toast(f"Could not open folder: {e}")
+
+    def _navigate_wallpaper(self, forward: bool) -> None:
+        coll = self.cfg.active()
+        images = list_images(coll.path)
+        recent = self.state.recent.get(coll.name, [])
+        if forward:
+            chosen = pick_random(images, recent)
+        else:
+            existing = {path.name: path for path in images}
+            chosen = next((existing[name] for name in recent[1:] if name in existing), None)
+        if chosen is None:
+            self._toast("No next wallpaper" if forward else "No previous wallpaper")
+            return
+        self._on_image_clicked(None, chosen)
+
+    def _on_key_pressed(self, _controller, keyval, _keycode, modifiers) -> bool:
+        if modifiers & Gdk.ModifierType.CONTROL_MASK:
+            if keyval in (Gdk.KEY_f, Gdk.KEY_F):
+                self.view_stack.set_visible_child_name("ddg")
+                self.ddg_query.grab_focus()
+                return True
+            if keyval in (Gdk.KEY_r, Gdk.KEY_R):
+                self._refresh_collections()
+                self._refresh_browse()
+                return True
+        if modifiers & Gdk.ModifierType.ALT_MASK and keyval in (Gdk.KEY_Left, Gdk.KEY_Right):
+            self._navigate_wallpaper(keyval == Gdk.KEY_Right)
+            return True
         return False
 
     # ---------- settings ----------
