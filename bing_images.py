@@ -23,10 +23,10 @@ TIMEOUT = 30
 # Sizes map to Bing's qft filter values
 SIZES = ("wallpaper", "large", "medium", "small", "")
 _SIZE_QFT = {
-    "wallpaper": "filterui:imagesize-wallpaper",
-    "large": "filterui:imagesize-large",
-    "medium": "filterui:imagesize-medium",
-    "small": "filterui:imagesize-small",
+    "wallpaper": "+filterui:imagesize-wallpaper",
+    "large": "+filterui:imagesize-large",
+    "medium": "+filterui:imagesize-medium",
+    "small": "+filterui:imagesize-small",
 }
 
 

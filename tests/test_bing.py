@@ -25,7 +25,7 @@ class BingTests(unittest.TestCase):
         self.assertEqual(urlparse(url).hostname, 'cn.bing.com')
         params = parse_qs(urlparse(url).query)
         self.assertEqual(params['q'], ['C++ & mountains'])
-        self.assertEqual(params['qft'], ['filterui:imagesize-wallpaper'])
+        self.assertEqual(params['qft'], ['+filterui:imagesize-wallpaper'])
 
     def test_challenge_is_reported(self):
         response = MagicMock()
