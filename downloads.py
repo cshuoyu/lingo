@@ -11,10 +11,26 @@ MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 SUFFIXES = {'JPEG': '.jpg', 'PNG': '.png', 'WEBP': '.webp', 'TIFF': '.tiff', 'BMP': '.bmp', 'GIF': '.gif'}
 
 
+def normalize_image_url(url: str) -> str:
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError("Image URL must use HTTP or HTTPS")
+    # Quote non-ASCII paths without double-encoding existing URL escapes.
+    host = parts.hostname.encode("idna").decode("ascii")
+    if ":" in host:
+        host = f"[{host}]"
+    if parts.port:
+        host += f":{parts.port}"
+    return urllib.parse.urlunsplit((
+        parts.scheme, host, urllib.parse.quote(parts.path, safe="/%:@!$&'()*+,;=-._~"),
+        urllib.parse.quote(parts.query, safe="%=&:+,/?@!$'()*;~-._"), "",
+    ))
+
+
 def download_image(item, destination: Path) -> Path | None:
-    request = urllib.request.Request(item.image_url, headers={
+    request = urllib.request.Request(normalize_image_url(item.image_url), headers={
         'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36',
-        'Referer': item.page_url or item.image_url,
+        'Referer': normalize_image_url(item.page_url or item.image_url),
     })
     with urllib.request.urlopen(request, timeout=30) as response:
         data = response.read(MAX_DOWNLOAD_BYTES + 1)

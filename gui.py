@@ -809,8 +809,9 @@ class LingoWindow(Adw.ApplicationWindow):
         def worker() -> None:
             try:
                 import urllib.request
+                from downloads import normalize_image_url
                 req = urllib.request.Request(
-                    url,
+                    normalize_image_url(url),
                     headers={
                         "User-Agent": (
                             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "

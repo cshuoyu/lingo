@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 from PIL import Image
 from bing_images import BingImage
-from downloads import download_image
+from downloads import download_image, normalize_image_url
 
 
 class DownloadTests(unittest.TestCase):
@@ -28,3 +28,12 @@ class DownloadTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 download_image(item, Path(root))
             self.assertEqual(list(Path(root).iterdir()), [])
+
+    def test_unicode_url_preserves_existing_escapes(self):
+        url = normalize_image_url('https://example.org/旅行%20写真.jpg?name=風景&token=a%2Bb')
+        self.assertTrue(url.isascii())
+        self.assertIn('%20', url)
+        self.assertNotIn('%2520', url)
+        self.assertIn('token=a%2Bb', url)
+        with self.assertRaises(ValueError):
+            normalize_image_url('file:///tmp/image.jpg')
