@@ -544,18 +544,6 @@ class LingoWindow(Adw.ApplicationWindow):
 
         outer.append(bar)
 
-        bar2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        bar2.append(Gtk.Label(label="Save to:"))
-        self.ddg_dest = Gtk.DropDown.new_from_strings([])
-        bar2.append(self.ddg_dest)
-        self.ddg_spinner = Gtk.Spinner()
-        bar2.append(self.ddg_spinner)
-        self.ddg_status = Gtk.Label(label="", xalign=0)
-        self.ddg_status.add_css_class("dim-label")
-        self.ddg_status.set_hexpand(True)
-        bar2.append(self.ddg_status)
-        outer.append(bar2)
-
         self.ddg_flow = Gtk.FlowBox()
         self.ddg_flow.set_selection_mode(Gtk.SelectionMode.NONE)
         self.ddg_flow.set_max_children_per_line(5)
@@ -580,7 +568,18 @@ class LingoWindow(Adw.ApplicationWindow):
         download_btn = Gtk.Button(label="Download selected")
         download_btn.add_css_class("suggested-action")
         download_btn.connect("clicked", self._on_ddg_download_clicked)
-        outer.append(download_btn)
+        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        footer.append(download_btn)
+        footer.append(Gtk.Label(label="Save to:"))
+        self.ddg_dest = Gtk.DropDown.new_from_strings([])
+        footer.append(self.ddg_dest)
+        self.ddg_spinner = Gtk.Spinner()
+        footer.append(self.ddg_spinner)
+        self.ddg_status = Gtk.Label(label="", xalign=0)
+        self.ddg_status.set_hexpand(True)
+        self.ddg_status.set_ellipsize(3)
+        footer.append(self.ddg_status)
+        outer.append(footer)
         return outer
 
     def _update_ddg_dropdown(self) -> None:
