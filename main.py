@@ -10,7 +10,6 @@ Subcommands:
   collections - list collections
   switch      - switch the active collection
   new         - create a new collection folder
-  fetch       - download NASA Image of the Day entries into a collection
   gui         - launch the GTK4 settings/browser window
   restart     - reload + restart the systemd user timer (triggers one tick)
   install     - set up ~/.config/lingo/, seed images from Variety, install systemd units
@@ -194,37 +193,6 @@ def cmd_new(args: argparse.Namespace) -> None:
     print(f"created collection {args.name} → {path}")
 
 
-def cmd_fetch(args: argparse.Namespace) -> None:
-    from nasa import download, fetch_iotd
-    cfg = Config.load()
-    target_name = args.into or cfg.active_collection
-    if target_name not in cfg.collections:
-        sys.exit(f"Unknown collection: {target_name}")
-    dst = cfg.collections[target_name].path
-    dst.mkdir(parents=True, exist_ok=True)
-
-    print(f"fetching NASA IOTD (limit={args.limit}) → {dst}")
-    items = fetch_iotd(limit=args.limit)
-    if not items:
-        print("(feed empty)")
-        return
-    copied = 0
-    for it in items:
-        try:
-            cached = download(it.image_url)
-        except Exception as e:
-            print(f"  ✗ {it.title}: {e}")
-            continue
-        target = dst / cached.name
-        if target.exists():
-            print(f"  = {target.name}")
-            continue
-        shutil.copy2(cached, target)
-        copied += 1
-        print(f"  + {target.name}  ({it.title})")
-    print(f"done: {copied} new file(s) in {dst}")
-
-
 def cmd_gui(_: argparse.Namespace) -> None:
     import gui
     gui.run()
@@ -379,11 +347,6 @@ def parse_args() -> argparse.Namespace:
     n.add_argument("name")
     n.add_argument("--path", help="Folder for the new collection (default: ~/.config/lingo/<name>)")
     n.set_defaults(func=cmd_new)
-
-    f = sub.add_parser("fetch", help="Download NASA Image of the Day entries")
-    f.add_argument("--limit", type=int, default=5)
-    f.add_argument("--into", help="Target collection (default: active)")
-    f.set_defaults(func=cmd_fetch)
 
     a = sub.add_parser("apply", help="Apply an arbitrary image as wallpaper")
     a.add_argument("image", type=Path)

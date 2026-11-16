@@ -1,4 +1,4 @@
-"""GTK4 + libadwaita window: browse collections and fetch NASA Image of the Day."""
+"""GTK4 + libadwaita window: browse collections, search images and configure wallpapers."""
 
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk  # noqa: E402
 from bing_images import SIZES as BING_SIZES, BingImage, search as bing_search
 from config import Collection, Config, State, cache_dir, config_dir
 from ddg_images import SIZES as DDG_SIZES, DdgImage, search as ddg_search
-from nasa import NasaImage, cache_path, download, fetch_page
 from rotator import EXTS as IMAGE_EXTS, list_images
 from wallpaper import compose_and_apply
 
@@ -88,9 +87,6 @@ class LingoWindow(Adw.ApplicationWindow):
             self._build_browse_tab(), "browse", "Browse", "folder-pictures-symbolic"
         )
         self.view_stack.add_titled_with_icon(
-            self._build_fetch_tab(), "fetch", "NASA", "globe-symbolic"
-        )
-        self.view_stack.add_titled_with_icon(
             self._build_ddg_tab(), "ddg", "Search", "edit-find-symbolic"
         )
 
@@ -159,7 +155,6 @@ class LingoWindow(Adw.ApplicationWindow):
         if active_row is not None:
             self.coll_list.select_row(active_row)
 
-        self._update_fetch_dropdown()
         self._update_ddg_dropdown()
 
     def _on_collection_selected(self, _list: Gtk.ListBox, row: Gtk.ListBoxRow | None) -> None:
@@ -179,7 +174,7 @@ class LingoWindow(Adw.ApplicationWindow):
         dialog.add_response("cancel", "Cancel")
         dialog.add_response("create", "Create")
         dialog.set_response_appearance("create", Adw.ResponseAppearance.SUGGESTED)
-        entry = Gtk.Entry(placeholder_text="collection name, e.g. nasa")
+        entry = Gtk.Entry(placeholder_text="collection name, e.g. landscapes")
         dialog.set_extra_child(entry)
         dialog.connect("response", self._on_new_collection_response, entry)
         dialog.present()
@@ -405,214 +400,6 @@ class LingoWindow(Adw.ApplicationWindow):
         if skipped:
             msg += f" ({skipped} skipped)"
         self._toast(msg)
-
-    # ---------- fetch tab ----------
-
-    def _build_fetch_tab(self) -> Gtk.Widget:
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        outer.set_margin_top(12)
-        outer.set_margin_bottom(12)
-        outer.set_margin_start(12)
-        outer.set_margin_end(12)
-
-        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-
-        refresh_btn = Gtk.Button(label="Refresh NASA feed")
-        refresh_btn.connect("clicked", self._on_fetch_refresh_clicked)
-        bar.append(refresh_btn)
-
-        bar.append(Gtk.Label(label="Save to:"))
-        self.fetch_dest = Gtk.DropDown.new_from_strings([])
-        bar.append(self.fetch_dest)
-
-        self.fetch_spinner = Gtk.Spinner()
-        bar.append(self.fetch_spinner)
-
-        self.fetch_status = Gtk.Label(label="", xalign=0)
-        self.fetch_status.add_css_class("dim-label")
-        self.fetch_status.set_hexpand(True)
-        bar.append(self.fetch_status)
-
-        outer.append(bar)
-
-        self.fetch_list = Gtk.ListBox()
-        self.fetch_list.set_selection_mode(Gtk.SelectionMode.NONE)
-        self.fetch_scroll = Gtk.ScrolledWindow()
-        self.fetch_scroll.set_vexpand(True)
-        self.fetch_scroll.set_child(self.fetch_list)
-        self.fetch_scroll.get_vadjustment().connect("value-changed", self._on_fetch_scroll)
-        outer.append(self.fetch_scroll)
-
-        download_btn = Gtk.Button(label="Download selected")
-        download_btn.add_css_class("suggested-action")
-        download_btn.connect("clicked", self._on_fetch_download_clicked)
-        outer.append(download_btn)
-
-        self._fetch_items: list[tuple[Gtk.CheckButton, NasaImage]] = []
-        self._fetch_page = 0
-        self._fetch_loading = False
-        self._fetch_has_more = True
-        return outer
-
-    def _update_fetch_dropdown(self) -> None:
-        if not hasattr(self, "fetch_dest"):
-            return
-        names = list(self.cfg.collections.keys())
-        model = Gtk.StringList.new(names)
-        self.fetch_dest.set_model(model)
-        if self.cfg.active_collection in names:
-            self.fetch_dest.set_selected(names.index(self.cfg.active_collection))
-
-    def _on_fetch_refresh_clicked(self, _btn: Gtk.Button) -> None:
-        child = self.fetch_list.get_first_child()
-        while child is not None:
-            nxt = child.get_next_sibling()
-            self.fetch_list.remove(child)
-            child = nxt
-        self._fetch_items = []
-        self._fetch_page = 0
-        self._fetch_has_more = True
-        self._fetch_loading = False
-        self.fetch_status.set_label("")
-        self._load_next_page()
-
-    def _on_fetch_scroll(self, adj: Gtk.Adjustment) -> None:
-        if self._fetch_loading or not self._fetch_has_more or self._fetch_page == 0:
-            return
-        if adj.get_upper() <= adj.get_page_size():
-            return
-        if adj.get_value() + adj.get_page_size() >= adj.get_upper() - 400:
-            self._load_next_page()
-
-    def _load_next_page(self) -> None:
-        if self._fetch_loading or not self._fetch_has_more:
-            return
-        self._fetch_loading = True
-        next_page = self._fetch_page + 1
-        self.fetch_spinner.start()
-        self.fetch_status.set_label(f"loading page {next_page}…")
-
-        def worker() -> None:
-            try:
-                items = fetch_page(next_page)
-                GLib.idle_add(self._append_fetch_items, next_page, items)
-            except Exception as e:
-                GLib.idle_add(self._fetch_error, str(e))
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _append_fetch_items(self, page: int, items: list[NasaImage]) -> bool:
-        self.fetch_spinner.stop()
-        self._fetch_loading = False
-        self._fetch_page = page
-
-        if not items:
-            self._fetch_has_more = False
-            self.fetch_status.set_label(f"end of feed (loaded {len(self._fetch_items)} items)")
-            return False
-
-        seen = {it.image_url for _, it in self._fetch_items}
-        added = 0
-        for it in items:
-            if it.image_url in seen:
-                continue
-            seen.add(it.image_url)
-            row = Gtk.ListBoxRow()
-            hb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-            hb.set_margin_top(8)
-            hb.set_margin_bottom(8)
-            hb.set_margin_start(8)
-            hb.set_margin_end(8)
-            check = Gtk.CheckButton()
-            check.set_active(False)
-            hb.append(check)
-
-            placeholder = Gtk.Picture()
-            placeholder.set_size_request(THUMB_W, THUMB_H)
-            placeholder.set_content_fit(Gtk.ContentFit.COVER)
-            hb.append(placeholder)
-            self._start_thumb_load(it, placeholder)
-
-            vb = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-            vb.set_hexpand(True)
-            title = Gtk.Label(label=it.title, xalign=0)
-            title.set_wrap(True)
-            title.add_css_class("heading")
-            vb.append(title)
-            date = Gtk.Label(label=it.pub_date, xalign=0)
-            date.add_css_class("caption")
-            date.add_css_class("dim-label")
-            vb.append(date)
-            desc = Gtk.Label(label=it.description[:200], xalign=0)
-            desc.set_wrap(True)
-            desc.add_css_class("caption")
-            vb.append(desc)
-            hb.append(vb)
-
-            row.set_child(hb)
-            self.fetch_list.append(row)
-            self._fetch_items.append((check, it))
-            added += 1
-        self.fetch_status.set_label(f"page {page} · {len(self._fetch_items)} items")
-        if added == 0:
-            self._fetch_has_more = False
-        return False
-
-    def _fetch_error(self, msg: str) -> bool:
-        self.fetch_spinner.stop()
-        self._fetch_loading = False
-        self.fetch_status.set_label(f"error: {msg}")
-        self._toast(f"Fetch failed: {msg}")
-        return False
-
-    def _start_thumb_load(self, item: NasaImage, picture: Gtk.Picture) -> None:
-        def worker() -> None:
-            try:
-                cached = download(item.image_url)
-                thumb = _make_thumb(cached)
-                GLib.idle_add(picture.set_filename, str(thumb))
-            except Exception:
-                pass
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _on_fetch_download_clicked(self, _btn: Gtk.Button) -> None:
-        selected_idx = self.fetch_dest.get_selected()
-        names = [n for n in self.cfg.collections.keys()]
-        if not names or selected_idx >= len(names):
-            self._toast("No destination collection")
-            return
-        dest_name = names[selected_idx]
-        dest = self.cfg.collections[dest_name].path
-        chosen = [it for check, it in self._fetch_items if check.get_active()]
-        if not chosen:
-            self._toast("Nothing selected")
-            return
-        self.fetch_spinner.start()
-
-        def worker() -> None:
-            import shutil as _shutil
-            added = 0
-            for it in chosen:
-                try:
-                    cached = download(it.image_url)
-                    target = dest / cached.name
-                    if not target.exists():
-                        _shutil.copy2(cached, target)
-                        added += 1
-                except Exception:
-                    continue
-            GLib.idle_add(self._download_done, added, dest_name)
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _download_done(self, added: int, dest_name: str) -> bool:
-        self.fetch_spinner.stop()
-        self._toast(f"Added {added} to {dest_name}")
-        self._refresh_collections()
-        if dest_name == self.cfg.active_collection:
-            self._refresh_browse()
-        return False
 
     # ---------- DuckDuckGo search tab ----------
 
