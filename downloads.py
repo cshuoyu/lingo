@@ -3,7 +3,7 @@ import hashlib
 from io import BytesIO
 from pathlib import Path
 import urllib.parse
-import urllib.request
+from http_client import fetch_bytes
 from PIL import Image
 from collection_ops import copy_image
 
@@ -28,14 +28,10 @@ def normalize_image_url(url: str) -> str:
 
 
 def download_image(item, destination: Path) -> Path | None:
-    request = urllib.request.Request(normalize_image_url(item.image_url), headers={
+    data = fetch_bytes(normalize_image_url(item.image_url), headers={
         'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36',
         'Referer': normalize_image_url(item.page_url or item.image_url),
-    })
-    with urllib.request.urlopen(request, timeout=30) as response:
-        data = response.read(MAX_DOWNLOAD_BYTES + 1)
-    if len(data) > MAX_DOWNLOAD_BYTES:
-        raise ValueError('Image exceeds the 64 MB download limit')
+    }, timeout=30, max_bytes=MAX_DOWNLOAD_BYTES)
     with Image.open(BytesIO(data)) as image:
         suffix = SUFFIXES.get(image.format)
         if suffix is None or image.format == 'GIF':

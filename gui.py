@@ -577,6 +577,7 @@ class LingoWindow(Adw.ApplicationWindow):
         self.ddg_scroll.get_vadjustment().connect("value-changed", self._on_ddg_scroll)
         outer.append(self.ddg_scroll)
 
+        self._thumb_slots = threading.BoundedSemaphore(6)
         self._ddg_generation = 0
         self._ddg_downloading = False
         self._ddg_items: list[tuple[Gtk.CheckButton, object]] = []
@@ -635,7 +636,7 @@ class LingoWindow(Adw.ApplicationWindow):
         sizes = BING_SIZES if backend == "bing" else DDG_SIZES if backend == "ddg" else API_SIZES
         labels = [s.capitalize() if s else "Any" for s in sizes]
         self.ddg_size.set_model(Gtk.StringList.new(labels))
-        self.ddg_size.set_selected(0)
+        self.ddg_size.set_selected(len(sizes) - 1 if backend == "bing" else 0)
 
     def _on_ddg_search_clicked(self, _w) -> None:
         query = self.ddg_query.get_text().strip()
@@ -793,35 +794,34 @@ class LingoWindow(Adw.ApplicationWindow):
             self._ddg_has_more = False
         self.ddg_more.set_label("Load more")
         self.ddg_more.set_sensitive(self._ddg_has_more)
-        self._ddg_start += len(results) if results else 0
+        self._ddg_start = getattr(results, "next_start", self._ddg_start + len(results))
         total = len(self._ddg_items)
         if added == 0 and not has_more:
             self._ddg_has_more = False
             self.ddg_status.set_label(f"end of results ({total} shown)")
+        elif not results and getattr(results, "scanned_count", 0):
+            self.ddg_status.set_label(f"No matches at this size in this page. Load more or choose Any size. ({total} shown)")
         else:
             self.ddg_status.set_label(f"{total} results")
+        self.ddg_status.set_tooltip_text(self.ddg_status.get_label())
         return False
 
     def _start_url_thumb_load(self, url: str, picture: Gtk.Picture) -> None:
         if not url:
             return
 
+        generation = self._ddg_generation
+
         def worker() -> None:
             try:
-                import urllib.request
                 from downloads import normalize_image_url
-                req = urllib.request.Request(
-                    normalize_image_url(url),
-                    headers={
-                        "User-Agent": (
-                            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                            "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-                        ),
-                        "Referer": "https://duckduckgo.com/",
-                    },
-                )
-                with urllib.request.urlopen(req, timeout=15) as r:
-                    data = r.read()
+                from http_client import fetch_bytes
+                from bing_images import USER_AGENT
+                with self._thumb_slots:
+                    if generation != self._ddg_generation:
+                        return
+                    data = fetch_bytes(normalize_image_url(url), headers={"User-Agent": USER_AGENT},
+                                       timeout=12, max_bytes=12 * 1024 * 1024)
                 loader = GdkPixbuf.PixbufLoader()
                 loader.write(data)
                 loader.close()

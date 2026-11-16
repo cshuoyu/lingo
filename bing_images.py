@@ -1,34 +1,23 @@
-"""Bing image search scraper.
-
-Parse image metadata independently of HTML attribute ordering. Prefer the
-regional search endpoint, with international search and pagination fallbacks
-when an endpoint returns an empty body. Result metadata is HTML-escaped JSON in the `m` attribute.
-"""
+"""Bing image search with local size filtering and unfiltered pagination."""
 
 from __future__ import annotations
 
 import json
+import zlib
 from html.parser import HTMLParser
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
+
+from http_client import fetch_bytes
 
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
-TIMEOUT = 30
+TIMEOUT = 12
 
-# Sizes map to Bing's qft filter values
 SIZES = ("wallpaper", "large", "medium", "small", "")
-_SIZE_QFT = {
-    "wallpaper": "+filterui:imagesize-wallpaper",
-    "large": "+filterui:imagesize-large",
-    "medium": "+filterui:imagesize-medium",
-    "small": "+filterui:imagesize-small",
-}
-
+PAGE_SIZE = 35
 
 
 @dataclass
@@ -42,63 +31,76 @@ class BingImage:
     page_url: str
 
 
-def search(
-    query: str,
-    *,
-    size: str = "wallpaper",
-    start: int = 0,
-) -> tuple[list[BingImage], bool]:
-    """Fetch one page of Bing image results.
+class BingPage(list[BingImage]):
+    """Filtered results carrying the offset in the unfiltered source page."""
+    def __init__(self, images, *, next_start: int, scanned_count: int):
+        super().__init__(images)
+        self.next_start = next_start
+        self.scanned_count = scanned_count
 
-    `start` is 0-based. Bing serves ~35 results per page; pass
-    `start += len(results)` to paginate. Returns (results, has_more).
+
+def _matches_size(image: BingImage, size: str) -> bool:
+    if not size:
+        return True
+    if not image.width or not image.height:
+        return False
+    longest = max(image.width, image.height)
+    return {
+        "wallpaper": image.width >= 1920 and image.height >= 1080,
+        "large": longest >= 1280,
+        "medium": 500 <= longest < 1280,
+        "small": longest < 500,
+    }[size]
+
+
+def _fetch_html(url: str) -> str:
+    return fetch_bytes(url, headers={
+        "User-Agent": USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.bing.com/",
+    }, timeout=TIMEOUT).decode("utf-8", errors="replace")
+
+
+def search(query: str, *, size: str = "wallpaper", start: int = 0) -> tuple[BingPage, bool]:
+    """Fetch one source page, then filter locally without changing its offset.
+
+    Bing's qft size filter can return script-only pages for ordinary queries.
+    Never send it to the server. Callers paginate with page.next_start, even
+    when the selected size leaves no matches in this particular source page.
     """
-    params = {
-        "q": query,
-        "safeSearch": "off",
-        "first": str(start + 1),
-        "count": "35",
-        "relp": "35",
-        "scenario": "ImageBasicHover",
-        "layout": "RowBased_Landscape",
-    }
-    if size and size in _SIZE_QFT:
-        params["qft"] = _SIZE_QFT[size]
-    bodies = []
+    if size not in SIZES:
+        raise ValueError(f"Unknown Bing image size: {size}")
+    if start < 0:
+        raise ValueError("Search offset must be nonnegative")
+    query = query.strip()
+    if not query:
+        raise ValueError("Enter a search query")
+    params = {"q": query, "first": start, "count": PAGE_SIZE, "adlt": "moderate"}
     errors = []
-    for host, endpoint in (("cn.bing.com", "search"), ("www.bing.com", "async"), ("www.bing.com", "search")):
-        request_params = dict(params)
-        if endpoint == "search":
-            request_params.pop("relp", None)
-            request_params.pop("scenario", None)
-            request_params.pop("layout", None)
-            request_params["form"] = "HDRSC2"
-        url = f"https://{host}/images/{endpoint}?" + urllib.parse.urlencode(request_params)
-        req = urllib.request.Request(url, headers={
-            "User-Agent": USER_AGENT,
-            "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-        })
+    no_results = False
+    for endpoint in ("async", "search"):
+        url = f"https://www.bing.com/images/{endpoint}?" + urllib.parse.urlencode(params)
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as response:
-                body = response.read().decode("utf-8", errors="replace")
-        except (urllib.error.URLError, TimeoutError) as e:
+            body = _fetch_html(url)
+        except (OSError, ValueError, zlib.error) as e:
             errors.append(str(e))
             continue
-        results = parse_results(body)
-        if results:
-            return results, True
-        bodies.append(body)
+        images = parse_results(body)
+        if images:
+            return BingPage(
+                [image for image in images if _matches_size(image, size)],
+                next_start=start + len(images), scanned_count=len(images),
+            ), True
         lowered = body.lower()
         if any(marker in lowered for marker in ("verify you are human", "challenge-form", 'id="b_captcha"')):
-            raise RuntimeError("Bing requires browser verification. Try another search engine.")
-    if start > 0 and bodies and not errors:
-        return [], False
-    if errors and not any(bodies):
+            raise RuntimeError("Bing requires browser verification. Open Bing in a browser and retry.")
+        no_results |= 'id="nr_indicator"' in lowered or 'id="dg_nr"' in lowered
+    if no_results:
+        return BingPage([], next_start=start, scanned_count=0), False
+    if errors:
         raise RuntimeError("Could not reach Bing: " + errors[-1])
-    if any("no results" in body.lower() or "no images" in body.lower() for body in bodies):
-        return [], False
-    raise RuntimeError("Bing returned an empty or unsupported page. Retry with Any size or use another engine.")
+    raise RuntimeError("Bing returned an empty or unsupported page, rather than image results. Please retry.")
 
 
 class _ImageParser(HTMLParser):

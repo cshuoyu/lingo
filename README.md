@@ -4,7 +4,7 @@
 
 ## 启动
 
-需要 Python 3.11+、GTK 4.10+、libadwaita 1.4+，以及系统提供的 PyGObject 和 Pillow。
+需要 Python 3.11+、GTK 4.10+、libadwaita 1.4+，以及系统提供的 PyGObject 和 Pillow。推荐安装 `curl`，用于为搜索、缩略图和图片下载提供涵盖连接与传输的总超时。
 
 ```bash
 python main.py gui
@@ -25,6 +25,7 @@ python main.py install --no-enable
 - 图片左上角的复制按钮可以将图片加入另一个收藏夹；遇到同名文件会自动编号。
 - 图片删除按钮将文件移入系统回收站。
 - **Search**：选择 DDG、Bing、Wallhaven 或 Wikimedia Commons，按尺寸搜索、全选或清空、加载更多、打开图片来源。下载按钮右侧选择保存到哪个收藏夹。
+- Bing 默认使用 Any 尺寸；选择其他尺寸时在本地筛选，Wallpaper 指至少 1920×1080。某页没有符合尺寸的图片时，仍可点击 Load more。
 - 下载前会检查图片内容，显示新增、已存在和失败数量；错误详情可以通过状态文字的悬浮提示查看。
 - **Settings**：调整模糊背景、适应、裁剪填充、拉伸或居中，以及时钟位置、字体大小、12/24 小时制或自定义 `strftime` 格式。
 - 支持按分钟间隔更新、每天当地时间指定时刻更新或仅手动更新。时钟每分钟刷新；“开机启动”指登录图形桌面后启动壁纸任务，不会自动打开设置窗口。
@@ -45,4 +46,6 @@ Bing 和 DDG 依赖网页接口，可能出现验证页、限流或页面结构�
 ```bash
 python -m unittest discover -s tests -v
 python -m compileall -q .
+# 有图形会话时，包含 GTK 控件回归检查
+GSETTINGS_BACKEND=memory LINGO_GUI_TEST=1 python -m unittest discover -s tests -v
 ```
