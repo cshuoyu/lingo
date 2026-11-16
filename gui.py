@@ -17,6 +17,7 @@ from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk  # noqa: E402
 from bing_images import SIZES as BING_SIZES, BingImage, search as bing_search
 from config import Collection, Config, State, cache_dir, config_dir
 from collection_ops import rename_collection, remove_collection, validate_name, copy_image
+from image_sources import API_SIZES, search as catalog_search
 from ddg_images import SIZES as DDG_SIZES, DdgImage, search as ddg_search
 from rotator import EXTS as IMAGE_EXTS, list_images
 from wallpaper import compose_and_apply
@@ -526,7 +527,7 @@ class LingoWindow(Adw.ApplicationWindow):
         bar.append(self.ddg_query)
 
         bar.append(Gtk.Label(label="Engine:"))
-        self.ddg_backend = Gtk.DropDown.new_from_strings(["DDG", "Bing"])
+        self.ddg_backend = Gtk.DropDown.new_from_strings(["DDG", "Bing", "Wallhaven", "Wikimedia Commons"])
         self.ddg_backend.set_selected(0)
         self.ddg_backend.connect("notify::selected", self._on_backend_changed)
         bar.append(self.ddg_backend)
@@ -592,8 +593,8 @@ class LingoWindow(Adw.ApplicationWindow):
             self.ddg_dest.set_selected(names.index(self.cfg.active_collection))
 
     def _on_backend_changed(self, _dd, _pspec) -> None:
-        backend = "bing" if self.ddg_backend.get_selected() == 1 else "ddg"
-        sizes = BING_SIZES if backend == "bing" else DDG_SIZES
+        backend = ("ddg", "bing", "wallhaven", "commons")[self.ddg_backend.get_selected()]
+        sizes = BING_SIZES if backend == "bing" else DDG_SIZES if backend == "ddg" else API_SIZES
         labels = [s.capitalize() if s else "Any" for s in sizes]
         self.ddg_size.set_model(Gtk.StringList.new(labels))
         self.ddg_size.set_selected(0)
@@ -614,8 +615,8 @@ class LingoWindow(Adw.ApplicationWindow):
         self._ddg_loading = False
         self._ddg_has_more = True
         self._ddg_query_text = query
-        self._ddg_backend = "bing" if self.ddg_backend.get_selected() == 1 else "ddg"
-        sizes = BING_SIZES if self._ddg_backend == "bing" else DDG_SIZES
+        self._ddg_backend = ("ddg", "bing", "wallhaven", "commons")[self.ddg_backend.get_selected()]
+        sizes = BING_SIZES if self._ddg_backend == "bing" else DDG_SIZES if self._ddg_backend == "ddg" else API_SIZES
         idx = self.ddg_size.get_selected()
         self._ddg_size_value = sizes[idx] if 0 <= idx < len(sizes) else ""
         self.ddg_status.set_label("")
@@ -646,6 +647,9 @@ class LingoWindow(Adw.ApplicationWindow):
                 if backend == "bing":
                     results, has_more = bing_search(query, size=size, start=start)
                     GLib.idle_add(self._ddg_append, results, vqd, has_more)
+                elif backend in ("wallhaven", "commons"):
+                    results, token, has_more = catalog_search(backend, query, size=size, token=vqd)
+                    GLib.idle_add(self._ddg_append, results, token, has_more)
                 else:
                     results, new_vqd, has_more = ddg_search(
                         query, size=size, start=start, vqd=vqd
