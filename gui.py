@@ -91,6 +91,9 @@ class LingoWindow(Adw.ApplicationWindow):
             self._build_ddg_tab(), "ddg", "Search", "edit-find-symbolic"
         )
 
+        self.view_stack.add_titled_with_icon(
+            self._build_settings_tab(), "settings", "Settings", "preferences-system-symbolic"
+        )
         self._refresh_collections()
         self._refresh_browse()
 
@@ -774,6 +777,119 @@ class LingoWindow(Adw.ApplicationWindow):
         if dest_name == self.cfg.active_collection:
             self._refresh_browse()
         return False
+
+    # ---------- settings ----------
+
+    def _build_settings_tab(self) -> Gtk.Widget:
+        scroll = Gtk.ScrolledWindow()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        for setter in (box.set_margin_top, box.set_margin_bottom, box.set_margin_start, box.set_margin_end):
+            setter(24)
+        scroll.set_child(box)
+        self.settings_fields = {}
+
+        def row(label, key, widget):
+            line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+            title = Gtk.Label(label=label, xalign=0)
+            title.set_hexpand(True)
+            line.append(title)
+            line.append(widget)
+            self.settings_fields[key] = widget
+            box.append(line)
+
+        def choices(label, key, labels, values, current):
+            widget = Gtk.DropDown.new_from_strings(labels)
+            widget.set_selected(values.index(current) if current in values else 0)
+            widget.setting_values = values
+            row(label, key, widget)
+
+        def toggle(label, key, value):
+            widget = Gtk.Switch(active=value, valign=Gtk.Align.CENTER)
+            row(label, key, widget)
+
+        def number(label, key, value, low, high):
+            widget = Gtk.SpinButton.new_with_range(low, high, 1)
+            widget.set_value(value)
+            row(label, key, widget)
+
+        def entry(label, key, value):
+            row(label, key, Gtk.Entry(text=value))
+
+        choices("Fill style", "fill_style", ["Blurred background", "Fit (black bars)", "Fill (crop)", "Stretch", "Center"],
+                ["blur", "fit", "fill", "stretch", "center"], self.cfg.fill_style)
+        number("Background blur", "blur", self.cfg.blur, 0, 200)
+        toggle("Show clock", "clock_enabled", self.cfg.clock_enabled)
+        choices("Clock position", "clock_side", ["Left", "Right"], ["left", "right"], self.cfg.clock_side)
+        choices("Time style", "time_preset", ["12-hour", "24-hour", "Custom"],
+                ["%-I:%M %p", "%H:%M", "custom"], self.cfg.time_format if self.cfg.time_format in ("%-I:%M %p", "%H:%M") else "custom")
+        entry("Custom time format", "time_format", self.cfg.time_format)
+        entry("Date format", "date_format", self.cfg.date_format)
+        number("Time font size", "time_size", self.cfg.time_size, 12, 400)
+        number("Date font size", "date_size", self.cfg.date_size, 12, 300)
+        choices("When to change wallpaper", "update_mode", ["At intervals", "Daily at a set time", "Manual only"],
+                ["interval", "daily", "manual"], self.cfg.update_mode)
+        number("Update interval (minutes)", "interval_minutes", self.cfg.interval_minutes, 1, 10080)
+        entry("Daily update time (HH:MM)", "daily_time", self.cfg.daily_time)
+        toggle("Start wallpaper updates at login", "autostart", self.cfg.autostart)
+        toggle("Change wallpaper at login", "update_on_start", self.cfg.update_on_start)
+        hint = Gtk.Label(label="Daily time uses your local timezone. The clock refreshes every minute.\nDeleting a collection keeps its image files.", xalign=0)
+        hint.set_wrap(True)
+        hint.add_css_class("dim-label")
+        box.append(hint)
+        save = Gtk.Button(label="Save settings")
+        save.add_css_class("suggested-action")
+        save.connect("clicked", self._save_settings)
+        box.append(save)
+        return scroll
+
+    def _save_settings(self, _button) -> None:
+        import datetime as dt
+        from dataclasses import replace
+        from scheduler import sync_schedule
+        values = {}
+        for key, widget in self.settings_fields.items():
+            if isinstance(widget, Gtk.DropDown):
+                values[key] = widget.setting_values[widget.get_selected()]
+            elif isinstance(widget, Gtk.Switch):
+                values[key] = widget.get_active()
+            elif isinstance(widget, Gtk.SpinButton):
+                values[key] = widget.get_value_as_int()
+            else:
+                values[key] = widget.get_text().strip()
+        preset = values.pop("time_preset")
+        if preset != "custom":
+            values["time_format"] = preset
+        try:
+            parsed_time = dt.datetime.strptime(values["daily_time"], "%H:%M")
+            values["daily_time"] = parsed_time.strftime("%H:%M")
+            for key in ("time_format", "date_format"):
+                if not values[key]:
+                    raise ValueError("Time and date formats cannot be empty")
+                dt.datetime.now().strftime(values[key])
+            cfg = replace(self.cfg, **values)
+            cfg.save()
+        except (ValueError, OSError) as e:
+            self._toast(f"Settings not saved: {e}")
+            return
+        self.cfg = cfg
+        self._toast("Settings saved; updating schedule…")
+
+        def worker():
+            try:
+                sync_schedule(cfg)
+                GLib.idle_add(self._toast, "Settings and wallpaper schedule updated")
+            except Exception as e:
+                GLib.idle_add(self._toast, f"Settings saved; schedule failed: {e}")
+        threading.Thread(target=worker, daemon=True).start()
+        current = self.state.current_for(self.cfg.active_collection)
+        if current:
+            path = self.cfg.active().path / current
+            if path.is_file():
+                try:
+                    compose_and_apply(self.cfg, self.state, path)
+                    self.state.save()
+                except Exception as e:
+                    self._toast(f"Settings saved; preview failed: {e}")
 
     # ---------- helpers ----------
 

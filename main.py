@@ -28,7 +28,7 @@ from pathlib import Path
 
 from compositor import compose
 from config import Collection, Config, DEFAULT_TOML, State, config_dir
-from rotator import list_images, pick_random, rotation_due
+from rotator import list_images, pick_random, scheduled_rotation_due
 from screen import primary_size
 from wallpaper import clock_from_cfg, compose_and_apply
 
@@ -47,7 +47,7 @@ UNIT_NAME = "lingo"
 
 # ---------- subcommands ----------
 
-def cmd_tick(_: argparse.Namespace) -> None:
+def cmd_tick(args: argparse.Namespace) -> None:
     cfg = Config.load()
     state = State.load()
     coll = cfg.active()
@@ -55,13 +55,17 @@ def cmd_tick(_: argparse.Namespace) -> None:
     if not images:
         return
     recent = state.recent.get(coll.name, [])
-    if rotation_due(state.last_rotation, cfg.interval_minutes) or not recent:
+    startup = getattr(args, "startup", False)
+    due = (cfg.update_on_start if startup else scheduled_rotation_due(cfg, state.last_rotation))
+    if due:
         pick = pick_random(images, recent)
         if pick is None:
             return
         state.push_recent(coll.name, pick.name)
         state.last_rotation = dt.datetime.now().isoformat(timespec="seconds")
     else:
+        if not recent or not cfg.clock_enabled:
+            return
         current_name = recent[0]
         matches = [p for p in images if p.name == current_name]
         pick = matches[0] if matches else pick_random(images, recent)
@@ -130,7 +134,7 @@ def cmd_render(args: argparse.Namespace) -> None:
         else primary_size()
     )
     clock = clock_from_cfg(cfg) if not args.no_clock else None
-    img = compose(args.image, (w, h), clock=clock, blur_radius=cfg.blur)
+    img = compose(args.image, (w, h), clock=clock, blur_radius=cfg.blur, fill_style=cfg.fill_style)
     img.save(args.output)
     print(f"wrote {args.output} ({w}x{h})")
 
@@ -283,27 +287,12 @@ def cmd_install(args: argparse.Namespace) -> None:
     shim.chmod(0o755)
     print(f"wrote {shim}")
 
-    # 5. systemd user units
-    SYSTEMD_USER_DIR.mkdir(parents=True, exist_ok=True)
-    svc = SYSTEMD_USER_DIR / f"{UNIT_NAME}.service"
-    tmr = SYSTEMD_USER_DIR / f"{UNIT_NAME}.timer"
-    svc.write_text(SERVICE_UNIT.format(project=PROJECT_DIR, python=python))
-    tmr.write_text(TIMER_UNIT.format(unit=UNIT_NAME))
-    print(f"wrote {svc}")
-    print(f"wrote {tmr}")
-
-    # 6. reload + enable + start
-    if not args.no_enable:
-        subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-        subprocess.run(
-            ["systemctl", "--user", "enable", "--now", f"{UNIT_NAME}.timer"],
-            check=True,
-        )
-        subprocess.run(
-            ["systemctl", "--user", "start", f"{UNIT_NAME}.service"],
-            check=True,
-        )
-        print(f"enabled + started {UNIT_NAME}.timer")
+    # Install the same schedule managed by the Settings page.
+    from scheduler import sync_schedule
+    cfg.autostart = not args.no_enable
+    cfg.save()
+    sync_schedule(cfg)
+    print("installed wallpaper schedule")
 
     # 7. warnings
     variety_autostart = Path.home() / ".config/autostart/variety.desktop"
@@ -325,9 +314,9 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="lingo", description="Lingo")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("tick", help="Re-render + rotate if due (timer entrypoint)").set_defaults(
-        func=cmd_tick
-    )
+    tick = sub.add_parser("tick", help="Re-render clock and rotate according to schedule")
+    tick.add_argument("--startup", action="store_true", help="Apply login update preference")
+    tick.set_defaults(func=cmd_tick)
     sub.add_parser("next", help="Random next image from active collection").set_defaults(
         func=cmd_next
     )

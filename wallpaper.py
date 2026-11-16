@@ -53,7 +53,7 @@ def clock_from_cfg(cfg: Config) -> ClockStyle | None:
 
 def compose_and_apply(cfg: Config, state: State, image_path: Path) -> Path:
     w, h = primary_size()
-    img = compose(image_path, (w, h), clock=clock_from_cfg(cfg), blur_radius=cfg.blur)
+    img = compose(image_path, (w, h), clock=clock_from_cfg(cfg), blur_radius=cfg.blur, fill_style=cfg.fill_style)
     state.slot = flip_slot(state.slot)
     out = slot_path(state.slot)
     tmp = out.with_suffix(out.suffix + ".part")

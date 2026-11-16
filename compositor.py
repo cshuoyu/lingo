@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 
 SERIF_FALLBACKS = (
@@ -108,11 +108,22 @@ def compose(
     screen_size: tuple[int, int],
     clock: ClockStyle | None = None,
     blur_radius: int = 40,
+    fill_style: str = "blur",
 ) -> Image.Image:
-    src = Image.open(image_path).convert("RGB")
-    bg = _cover_blur(src, screen_size, blur_radius).convert("RGBA")
-    fg, offset = _contain(src, screen_size)
-    bg.paste(fg, offset)
+    with Image.open(image_path) as opened:
+        src = ImageOps.exif_transpose(opened).convert("RGB")
+    if fill_style == "fill":
+        bg = ImageOps.fit(src, screen_size, method=Image.Resampling.LANCZOS).convert("RGBA")
+    elif fill_style == "stretch":
+        bg = src.resize(screen_size, Image.Resampling.LANCZOS).convert("RGBA")
+    elif fill_style in ("blur", "fit", "center"):
+        bg = (_cover_blur(src, screen_size, blur_radius).convert("RGBA")
+              if fill_style == "blur" else Image.new("RGBA", screen_size, "black"))
+        fg, offset = (_contain(src, screen_size) if fill_style != "center" else
+                      (src, ((screen_size[0] - src.width) // 2, (screen_size[1] - src.height) // 2)))
+        bg.paste(fg, offset)
+    else:
+        raise ValueError(f"Unknown fill style: {fill_style}")
     if clock is not None:
         _draw_clock(bg, clock)
     return bg.convert("RGB")

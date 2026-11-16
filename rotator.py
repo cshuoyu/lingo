@@ -34,3 +34,22 @@ def pick_random(images: list[Path], recent: list[str], avoid: int = 5) -> Path |
     if not pool:
         pool = images
     return random.choice(pool)
+
+
+def scheduled_rotation_due(cfg, last_iso: str, now: dt.datetime | None = None) -> bool:
+    now = now or dt.datetime.now()
+    if cfg.update_mode == "manual":
+        return False
+    if cfg.update_mode == "interval":
+        return rotation_due(last_iso, cfg.interval_minutes, now)
+    if cfg.update_mode == "daily":
+        hour, minute = map(int, cfg.daily_time.split(":"))
+        scheduled = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if now < scheduled:
+            return False
+        try:
+            last = dt.datetime.fromisoformat(last_iso)
+        except ValueError:
+            return True
+        return last < scheduled
+    raise ValueError(f"Unknown update mode: {cfg.update_mode}")

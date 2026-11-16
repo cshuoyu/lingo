@@ -26,6 +26,10 @@ DEFAULT_TOML = """# Lingo configuration.
 [rotation]
 active_collection = "default"
 interval_minutes = 60
+update_mode = "interval"
+daily_time = "09:00"
+autostart = false
+update_on_start = true
 
 [clock]
 enabled = true
@@ -36,6 +40,7 @@ time_format = "%-I:%M %p"
 date_format = "%A, %B %-d"
 
 [compose]
+fill_style = "blur"
 blur = 40
 
 [collections.default]
@@ -60,6 +65,11 @@ class Config:
     date_size: int = 88
     time_format: str = "%-I:%M %p"
     date_format: str = "%A, %B %-d"
+    fill_style: str = "blur"
+    update_mode: str = "interval"
+    daily_time: str = "09:00"
+    autostart: bool = False
+    update_on_start: bool = True
     blur: int = 40
 
     def active(self) -> Collection:
@@ -109,6 +119,11 @@ class Config:
             time_format=str(c.get("time_format", "%-I:%M %p")),
             date_format=str(c.get("date_format", "%A, %B %-d")),
             blur=int(cm.get("blur", 40)),
+            fill_style=str(cm.get("fill_style", "blur")),
+            update_mode=str(r.get("update_mode", "interval")),
+            daily_time=str(r.get("daily_time", "09:00")),
+            autostart=bool(r.get("autostart", False)),
+            update_on_start=bool(r.get("update_on_start", True)),
         )
 
     def save(self) -> None:
@@ -116,6 +131,10 @@ class Config:
             ("rotation", {
                 "active_collection": self.active_collection,
                 "interval_minutes": self.interval_minutes,
+                "update_mode": self.update_mode,
+                "daily_time": self.daily_time,
+                "autostart": self.autostart,
+                "update_on_start": self.update_on_start,
             }),
             ("clock", {
                 "enabled": self.clock_enabled,
@@ -127,6 +146,7 @@ class Config:
             }),
             ("compose", {
                 "blur": self.blur,
+                "fill_style": self.fill_style,
             }),
         ]
         for name, coll in self.collections.items():
