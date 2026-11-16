@@ -958,7 +958,23 @@ class LingoWindow(Adw.ApplicationWindow):
         save.add_css_class("suggested-action")
         save.connect("clicked", self._save_settings)
         box.append(save)
+        for key in ("update_mode", "time_preset"):
+            self.settings_fields[key].connect("notify::selected", self._settings_sensitivity)
+        for key in ("clock_enabled", "autostart"):
+            self.settings_fields[key].connect("notify::active", self._settings_sensitivity)
+        self._settings_sensitivity()
         return scroll
+
+    def _settings_sensitivity(self, *_args) -> None:
+        fields = self.settings_fields
+        mode = fields["update_mode"].setting_values[fields["update_mode"].get_selected()]
+        fields["interval_minutes"].set_sensitive(mode == "interval")
+        fields["daily_time"].set_sensitive(mode == "daily")
+        clock = fields["clock_enabled"].get_active()
+        for key in ("clock_side", "time_preset", "date_format", "time_size", "date_size"):
+            fields[key].set_sensitive(clock)
+        fields["time_format"].set_sensitive(clock and fields["time_preset"].get_selected() == 2)
+        fields["update_on_start"].set_sensitive(fields["autostart"].get_active())
 
     def _save_settings(self, _button) -> None:
         import datetime as dt
@@ -990,6 +1006,7 @@ class LingoWindow(Adw.ApplicationWindow):
             self._toast(f"Settings not saved: {e}")
             return
         self.cfg = cfg
+        _button.set_sensitive(False)
         self._toast("Settings saved; updating schedule…")
 
         def worker():
@@ -998,6 +1015,8 @@ class LingoWindow(Adw.ApplicationWindow):
                 GLib.idle_add(self._toast, "Settings and wallpaper schedule updated")
             except Exception as e:
                 GLib.idle_add(self._toast, f"Settings saved; schedule failed: {e}")
+            finally:
+                GLib.idle_add(_button.set_sensitive, True)
         threading.Thread(target=worker, daemon=True).start()
         current = self.state.current_for(self.cfg.active_collection)
         if current:

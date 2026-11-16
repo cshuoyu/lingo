@@ -211,30 +211,6 @@ def cmd_restart(_: argparse.Namespace) -> None:
 
 # ---------- install ----------
 
-SERVICE_UNIT = """[Unit]
-Description=Lingo tick
-After=graphical-session.target
-PartOf=graphical-session.target
-
-[Service]
-Type=oneshot
-WorkingDirectory={project}
-ExecStart={python} {project}/main.py tick
-"""
-
-TIMER_UNIT = """[Unit]
-Description=Lingo minute tick
-
-[Timer]
-OnBootSec=30s
-OnCalendar=minutely
-AccuracySec=1s
-Unit={unit}.service
-
-[Install]
-WantedBy=timers.target
-"""
-
 LINGO_SCRIPT = """#!/bin/sh
 exec {python} {project}/main.py "$@"
 """

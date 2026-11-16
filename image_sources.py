@@ -29,6 +29,10 @@ def search(engine, query, *, size='', token=None):
             thumb_url=item.get('thumbs', {}).get('small', ''), width=item['dimension_x'],
             height=item['dimension_y'], source='wallhaven.cc', page_url=item['url'],
         ) for item in data.get('data', [])]
+        if size == 'Medium':
+            results = [item for item in results if 500 <= max(item.width, item.height) < 1280]
+        elif size == 'Small':
+            results = [item for item in results if max(item.width, item.height) < 500]
         page = data.get('meta', {}).get('current_page', int(token or 1))
         return results, str(page + 1), page < data.get('meta', {}).get('last_page', page)
     if engine != 'commons':
