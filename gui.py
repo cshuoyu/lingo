@@ -410,17 +410,18 @@ class LingoWindow(Adw.ApplicationWindow):
         dialog.connect("response", response)
         dialog.present()
 
-    def _on_image_clicked(self, _btn: Gtk.Button, img_path: Path) -> None:
+    def _on_image_clicked(self, _btn: Gtk.Button | None, img_path: Path) -> bool:
         coll = self.cfg.active()
         try:
             compose_and_apply(self.cfg, self.state, img_path)
         except Exception as e:
             self._toast(f"apply failed: {e}")
-            return
+            return False
         self.state.push_recent(coll.name, img_path.name)
         self.state.last_rotation = dt.datetime.now().isoformat(timespec="seconds")
         self.state.save()
         self._toast(f"Applied {img_path.name}")
+        return True
 
     def _on_delete_clicked(self, _btn: Gtk.Button, img_path: Path) -> None:
         dialog = Adw.MessageDialog.new(self, "Move wallpaper to Trash?", None)
@@ -891,7 +892,11 @@ class LingoWindow(Adw.ApplicationWindow):
         if chosen is None:
             self._toast("No next wallpaper" if forward else "No previous wallpaper")
             return
-        self._on_image_clicked(None, chosen)
+        previous_history = list(recent)
+        if not forward:
+            self.state.recent[coll.name] = recent[recent.index(chosen.name):]
+        if not self._on_image_clicked(None, chosen) and not forward:
+            self.state.recent[coll.name] = previous_history
 
     def _on_key_pressed(self, _controller, keyval, _keycode, modifiers) -> bool:
         if modifiers & Gdk.ModifierType.CONTROL_MASK:

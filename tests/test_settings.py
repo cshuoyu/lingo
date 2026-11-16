@@ -55,3 +55,9 @@ class SettingsTests(unittest.TestCase):
             self.cfg.autostart = True
             sync_schedule(self.cfg)
             self.assertEqual(run.call_args_list[-2].args[0][2], 'enable')
+
+    def test_install_without_start_keeps_timer_stopped(self):
+        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, XDG_CONFIG_HOME=root), patch('scheduler.subprocess.run') as run:
+            run.return_value.returncode = 0
+            sync_schedule(self.cfg, start_current=False)
+            self.assertEqual(run.call_args.args[0][-2:], ['stop', 'lingo.timer'])
