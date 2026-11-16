@@ -578,6 +578,7 @@ class LingoWindow(Adw.ApplicationWindow):
         outer.append(self.ddg_scroll)
 
         self._ddg_generation = 0
+        self._ddg_downloading = False
         self._ddg_items: list[tuple[Gtk.CheckButton, object]] = []
         self._ddg_vqd: str | None = None
         self._ddg_start = 0
@@ -599,6 +600,7 @@ class LingoWindow(Adw.ApplicationWindow):
         outer.append(controls)
         download_btn = Gtk.Button(label="Download selected")
         self.ddg_download = download_btn
+        download_btn.set_sensitive(False)
         download_btn.add_css_class("suggested-action")
         download_btn.connect("clicked", self._on_ddg_download_clicked)
         footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -618,11 +620,15 @@ class LingoWindow(Adw.ApplicationWindow):
     def _update_ddg_dropdown(self) -> None:
         if not hasattr(self, "ddg_dest"):
             return
+        previous = self.ddg_dest.get_selected_item()
+        destination = previous.get_string() if previous else self.cfg.active_collection
         names = list(self.cfg.collections.keys())
         model = Gtk.StringList.new(names)
         self.ddg_dest.set_model(model)
-        if self.cfg.active_collection in names:
-            self.ddg_dest.set_selected(names.index(self.cfg.active_collection))
+        if destination not in names:
+            destination = self.cfg.active_collection
+        if destination in names:
+            self.ddg_dest.set_selected(names.index(destination))
 
     def _on_backend_changed(self, _dd, _pspec) -> None:
         backend = ("ddg", "bing", "wallhaven", "commons")[self.ddg_backend.get_selected()]
@@ -643,6 +649,7 @@ class LingoWindow(Adw.ApplicationWindow):
             child = nxt
         self._ddg_generation += 1
         self._ddg_items = []
+        self._selection_changed()
         self._ddg_vqd = None
         self._ddg_start = 0
         self._ddg_loading = False
@@ -712,6 +719,11 @@ class LingoWindow(Adw.ApplicationWindow):
             callback(*args)
         return False
 
+    def _selection_changed(self, *_args) -> None:
+        count = sum(check.get_active() for check, _item in self._ddg_items)
+        self.ddg_download.set_label(f"Download selected ({count})" if count else "Download selected")
+        self.ddg_download.set_sensitive(count > 0 and not self._ddg_downloading)
+
     def _select_search_results(self, _button, active) -> None:
         for check, _item in self._ddg_items:
             check.set_active(active)
@@ -770,6 +782,7 @@ class LingoWindow(Adw.ApplicationWindow):
                 card.append(source_link)
             check = Gtk.CheckButton(label="Select")
             check.set_active(False)
+            check.connect("toggled", self._selection_changed)
             card.append(check)
 
             self.ddg_flow.append(card)
@@ -835,7 +848,8 @@ class LingoWindow(Adw.ApplicationWindow):
         self.ddg_spinner.start()
         self.ddg_status.set_label(f"downloading {len(chosen)}…")
 
-        self.ddg_download.set_sensitive(False)
+        self._ddg_downloading = True
+        self._selection_changed()
 
         def worker() -> None:
             from downloads import download_image
@@ -856,7 +870,8 @@ class LingoWindow(Adw.ApplicationWindow):
 
     def _ddg_download_done(self, added, skipped, failed, error, dest_name) -> bool:
         self.ddg_spinner.stop()
-        self.ddg_download.set_sensitive(True)
+        self._ddg_downloading = False
+        self._selection_changed()
         message = f"Added {added} to {dest_name}; {skipped} already saved; {failed} failed"
         self.ddg_status.set_label(message)
         self.ddg_status.set_tooltip_text(error or message)
