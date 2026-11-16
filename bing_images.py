@@ -1,8 +1,8 @@
 """Bing image search scraper.
 
 Parse image metadata independently of HTML attribute ordering. Prefer the
-image pagination endpoint, with a regular search page fallback when it returns
-an empty body. Result metadata is HTML-escaped JSON in the `m` attribute.
+regional search endpoint, with international search and pagination fallbacks
+when an endpoint returns an empty body. Result metadata is HTML-escaped JSON in the `m` attribute.
 """
 
 from __future__ import annotations
@@ -66,14 +66,14 @@ def search(
         params["qft"] = _SIZE_QFT[size]
     bodies = []
     errors = []
-    for endpoint in ("async", "search"):
+    for host, endpoint in (("cn.bing.com", "search"), ("www.bing.com", "async"), ("www.bing.com", "search")):
         request_params = dict(params)
         if endpoint == "search":
             request_params.pop("relp", None)
             request_params.pop("scenario", None)
             request_params.pop("layout", None)
             request_params["form"] = "HDRSC2"
-        url = f"https://www.bing.com/images/{endpoint}?" + urllib.parse.urlencode(request_params)
+        url = f"https://{host}/images/{endpoint}?" + urllib.parse.urlencode(request_params)
         req = urllib.request.Request(url, headers={
             "User-Agent": USER_AGENT,
             "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
