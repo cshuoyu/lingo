@@ -1,0 +1,27 @@
+# Python caches and build output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Local environments and secrets
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Local editor and agent settings
+.idea/
+.vscode/
+.agents/
+.codex/
+.aws/
+
+# Runtime logs and OS files
+*.log
+.DS_Store
