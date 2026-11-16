@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from config import Collection, Config, State
-from collection_ops import rename_collection, remove_collection
+from collection_ops import rename_collection, remove_collection, copy_image
 
 
 class CollectionTests(unittest.TestCase):
@@ -28,3 +28,17 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(state.last_rotation, '')
         with self.assertRaises(ValueError):
             remove_collection(cfg, state, 'other')
+
+    def test_copy_preserves_source_and_handles_conflicts(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / 'photo.jpg'
+            source.write_bytes(b'first')
+            destination = Path(root) / 'other'
+            first = copy_image(source, destination)
+            source.write_bytes(b'second')
+            second = copy_image(source, destination)
+            self.assertEqual(first.read_bytes(), b'first')
+            self.assertEqual(second.read_bytes(), b'second')
+            self.assertEqual(source.read_bytes(), b'second')
+            with self.assertRaises(ValueError):
+                copy_image(source, source.parent)

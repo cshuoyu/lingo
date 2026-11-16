@@ -16,7 +16,7 @@ from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk  # noqa: E402
 
 from bing_images import SIZES as BING_SIZES, BingImage, search as bing_search
 from config import Collection, Config, State, cache_dir, config_dir
-from collection_ops import rename_collection, remove_collection, validate_name
+from collection_ops import rename_collection, remove_collection, validate_name, copy_image
 from ddg_images import SIZES as DDG_SIZES, DdgImage, search as ddg_search
 from rotator import EXTS as IMAGE_EXTS, list_images
 from wallpaper import compose_and_apply
@@ -357,7 +357,43 @@ class LingoWindow(Adw.ApplicationWindow):
             delete_btn.set_margin_end(6)
             delete_btn.connect("clicked", self._on_delete_clicked, img_path)
             overlay.add_overlay(delete_btn)
+            copy_btn = Gtk.Button.new_from_icon_name("edit-copy-symbolic")
+            copy_btn.add_css_class("circular")
+            copy_btn.add_css_class("osd")
+            copy_btn.set_tooltip_text("Copy to another collection…")
+            copy_btn.set_halign(Gtk.Align.START)
+            copy_btn.set_valign(Gtk.Align.START)
+            copy_btn.set_margin_top(6)
+            copy_btn.set_margin_start(6)
+            copy_btn.connect("clicked", self._on_copy_image, img_path)
+            overlay.add_overlay(copy_btn)
             self.browse_flow.append(overlay)
+
+    def _on_copy_image(self, _button, image_path: Path) -> None:
+        names = [name for name, coll in self.cfg.collections.items()
+                 if coll.path.resolve() != image_path.parent.resolve()]
+        if not names:
+            self._toast("Create another collection first")
+            return
+        dialog = Adw.MessageDialog.new(self, "Copy image to collection", image_path.name)
+        destination = Gtk.DropDown.new_from_strings(names)
+        dialog.set_extra_child(destination)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("copy", "Copy")
+        dialog.set_response_appearance("copy", Adw.ResponseAppearance.SUGGESTED)
+        def response(_dialog, action):
+            if action != "copy":
+                return
+            name = names[destination.get_selected()]
+            try:
+                target = copy_image(image_path, self.cfg.collections[name].path)
+            except (ValueError, OSError) as e:
+                self._toast(f"Copy failed: {e}")
+                return
+            self._refresh_collections()
+            self._toast(f"Copied {target.name} to {name}")
+        dialog.connect("response", response)
+        dialog.present()
 
     def _on_image_clicked(self, _btn: Gtk.Button, img_path: Path) -> None:
         coll = self.cfg.active()

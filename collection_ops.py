@@ -30,3 +30,29 @@ def remove_collection(cfg: Config, state: State, name: str) -> None:
     if cfg.active_collection == name:
         cfg.active_collection = next(iter(cfg.collections))
         state.last_rotation = ''
+
+
+def copy_image(source, destination):
+    """Copy without overwriting existing images, including same-name conflicts."""
+    import shutil
+    from pathlib import Path
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    target = destination / source.name
+    if source.resolve() == target.resolve():
+        raise ValueError("This image is already in that collection.")
+    index = 1
+    while True:
+        try:
+            # Exclusive creation closes the race between checking and writing.
+            with target.open("xb") as output:
+                try:
+                    with source.open("rb") as input_file:
+                        shutil.copyfileobj(input_file, output)
+                except Exception:
+                    target.unlink(missing_ok=True)
+                    raise
+            return target
+        except FileExistsError:
+            target = destination / f"{source.stem} ({index}){source.suffix}"
+            index += 1
