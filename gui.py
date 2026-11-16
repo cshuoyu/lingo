@@ -557,6 +557,10 @@ class LingoWindow(Adw.ApplicationWindow):
         search_btn.add_css_class("suggested-action")
         search_btn.connect("clicked", self._on_ddg_search_clicked)
         bar.append(search_btn)
+        cancel_btn = Gtk.Button.new_from_icon_name("process-stop-symbolic")
+        cancel_btn.set_tooltip_text("Cancel search")
+        cancel_btn.connect("clicked", self._cancel_search)
+        bar.append(cancel_btn)
 
         outer.append(bar)
 
@@ -689,6 +693,14 @@ class LingoWindow(Adw.ApplicationWindow):
                 GLib.idle_add(self._search_callback, generation, self._ddg_error, str(e))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _cancel_search(self, _button) -> None:
+        self._ddg_generation += 1
+        self._ddg_loading = False
+        self._ddg_has_more = False
+        self.ddg_spinner.stop()
+        self.ddg_more.set_sensitive(False)
+        self.ddg_status.set_label("Search cancelled")
 
     def _retry_or_load_more(self, _button) -> None:
         self._ddg_has_more = True

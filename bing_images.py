@@ -1,8 +1,8 @@
 """Bing image search scraper.
 
-Parses `<a class="iusc" m="{…}">` anchors from the search HTML. SafeSearch
-is toggled via the `safeSearch=off` URL param; Bing honors it server-side.
-Result metadata is embedded as HTML-escaped JSON in the `m` attribute.
+Parse image metadata independently of HTML attribute ordering. Prefer the
+image pagination endpoint, with a regular search page fallback when it returns
+an empty body. Result metadata is HTML-escaped JSON in the `m` attribute.
 """
 
 from __future__ import annotations
@@ -58,32 +58,47 @@ def search(
         "safeSearch": "off",
         "first": str(start + 1),
         "count": "35",
-        "mmasync": "1",
+        "relp": "35",
+        "scenario": "ImageBasicHover",
+        "layout": "RowBased_Landscape",
     }
     if size and size in _SIZE_QFT:
         params["qft"] = _SIZE_QFT[size]
-    url = "https://www.bing.com/images/async?" + urllib.parse.urlencode(
-        params
-    )
-    req = urllib.request.Request(url, headers={
-        "User-Agent": USER_AGENT,
-        "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-    })
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            body = r.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"Bing error {e.code}") from e
-
-    results = parse_results(body)
-    if not results and start == 0:
+    bodies = []
+    errors = []
+    for endpoint in ("async", "search"):
+        request_params = dict(params)
+        if endpoint == "search":
+            request_params.pop("relp", None)
+            request_params.pop("scenario", None)
+            request_params.pop("layout", None)
+            request_params["form"] = "HDRSC2"
+        url = f"https://www.bing.com/images/{endpoint}?" + urllib.parse.urlencode(request_params)
+        req = urllib.request.Request(url, headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as response:
+                body = response.read().decode("utf-8", errors="replace")
+        except (urllib.error.URLError, TimeoutError) as e:
+            errors.append(str(e))
+            continue
+        results = parse_results(body)
+        if results:
+            return results, True
+        bodies.append(body)
         lowered = body.lower()
-        if any(marker in lowered for marker in ("captcha", "verify you are human", "challenge-form")):
+        if any(marker in lowered for marker in ("verify you are human", "challenge-form", 'id="b_captcha"')):
             raise RuntimeError("Bing requires browser verification. Try another search engine.")
-        if not any(marker in lowered for marker in ("no results", "no images", "没有找到")):
-            raise RuntimeError("Bing returned no readable image results. Try another engine or size filter.")
-    return results, bool(results)
+    if start > 0 and bodies and not errors:
+        return [], False
+    if errors and not any(bodies):
+        raise RuntimeError("Could not reach Bing: " + errors[-1])
+    if any("no results" in body.lower() or "no images" in body.lower() for body in bodies):
+        return [], False
+    raise RuntimeError("Bing returned an empty or unsupported page. Retry with Any size or use another engine.")
 
 
 class _ImageParser(HTMLParser):
@@ -102,9 +117,11 @@ class _ImageParser(HTMLParser):
             if urllib.parse.urlparse(url).scheme not in ("http", "https") or url in self.seen:
                 return
             page = (metadata.get("purl") or "").strip()
+            link_params = urllib.parse.parse_qs(urllib.parse.urlparse(attrs.get("href") or "").query)
             def dimension(key, fallback):
                 try:
-                    return int(metadata.get(key) or metadata.get(fallback) or 0)
+                    return int(metadata.get(key) or metadata.get(fallback) or
+                               link_params.get("expw" if key == "ow" else "exph", [0])[0])
                 except (TypeError, ValueError):
                     return 0
             self.results.append(BingImage(

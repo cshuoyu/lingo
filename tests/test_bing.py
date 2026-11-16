@@ -20,7 +20,7 @@ class BingTests(unittest.TestCase):
         response.__enter__.return_value.read.return_value = b'no results'
         with patch('urllib.request.urlopen', return_value=response) as request:
             self.assertEqual(bing_images.search('C++ & mountains'), ([], False))
-        url = request.call_args.args[0].full_url
+        url = request.call_args_list[0].args[0].full_url
         self.assertEqual(urlparse(url).path, '/images/async')
         params = parse_qs(urlparse(url).query)
         self.assertEqual(params['q'], ['C++ & mountains'])
@@ -32,3 +32,14 @@ class BingTests(unittest.TestCase):
         with patch('urllib.request.urlopen', return_value=response):
             with self.assertRaisesRegex(RuntimeError, 'verification'):
                 bing_images.search('mountains')
+
+    def test_empty_async_falls_back_to_search_page(self):
+        response = MagicMock()
+        metadata = html.escape(json.dumps({'murl': 'https://example.org/a.jpg'}))
+        response.__enter__.return_value.read.side_effect = [b'', f'<a class="iusc" m="{metadata}" href="?expw=1920&amp;exph=1080">'.encode()]
+        with patch('urllib.request.urlopen', return_value=response) as request:
+            results, more = bing_images.search('mountains')
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].width, 1920)
+        self.assertTrue(more)
+        self.assertEqual(urlparse(request.call_args.args[0].full_url).path, '/images/search')
