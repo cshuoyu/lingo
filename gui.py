@@ -16,6 +16,7 @@ from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk  # noqa: E402
 
 from bing_images import SIZES as BING_SIZES, BingImage, search as bing_search
 from config import Collection, Config, State, cache_dir, config_dir
+from collection_ops import rename_collection, remove_collection, validate_name
 from ddg_images import SIZES as DDG_SIZES, DdgImage, search as ddg_search
 from rotator import EXTS as IMAGE_EXTS, list_images
 from wallpaper import compose_and_apply
@@ -149,6 +150,10 @@ class LingoWindow(Adw.ApplicationWindow):
             vb.append(subtitle)
             hb.append(vb)
             row.set_child(hb)
+            gesture = Gtk.GestureClick.new()
+            gesture.set_button(3)
+            gesture.connect("pressed", self._on_collection_menu, row, name)
+            row.add_controller(gesture)
             self.coll_list.append(row)
             if name == self.cfg.active_collection:
                 active_row = row
@@ -185,8 +190,10 @@ class LingoWindow(Adw.ApplicationWindow):
         if response != "create":
             return
         name = entry.get_text().strip()
-        if not name or name in self.cfg.collections:
-            self._toast("Invalid or duplicate name")
+        try:
+            validate_name(self.cfg, name)
+        except ValueError as e:
+            self._toast(str(e))
             return
         path = config_dir() / name
         path.mkdir(parents=True, exist_ok=True)
@@ -194,6 +201,67 @@ class LingoWindow(Adw.ApplicationWindow):
         self.cfg.save()
         self._refresh_collections()
         self._toast(f"Created {name} at {path}")
+
+    def _on_collection_menu(self, gesture, _press, x, y, row, name) -> None:
+        popover = Gtk.Popover()
+        popover.set_parent(row)
+        rect = Gdk.Rectangle()
+        rect.x, rect.y, rect.width, rect.height = int(x), int(y), 1, 1
+        popover.set_pointing_to(rect)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        for label, callback in (("Rename collection…", self._rename_collection),
+                                ("Delete collection…", self._delete_collection)):
+            button = Gtk.Button(label=label)
+            button.add_css_class("flat")
+            button.connect("clicked", lambda _b, fn=callback: (popover.popdown(), fn(name)))
+            box.append(button)
+        popover.set_child(box)
+        popover.connect("closed", lambda widget: widget.unparent())
+        popover.popup()
+
+    def _rename_collection(self, name: str) -> None:
+        dialog = Adw.MessageDialog.new(self, "Rename collection", None)
+        entry = Gtk.Entry(text=name)
+        dialog.set_extra_child(entry)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("rename", "Rename")
+        dialog.set_default_response("rename")
+        def response(_dialog, action):
+            if action != "rename":
+                return
+            try:
+                rename_collection(self.cfg, self.state, name, entry.get_text().strip())
+                self.cfg.save()
+                self.state.save()
+            except (ValueError, OSError) as e:
+                self._toast(str(e))
+                return
+            self._refresh_collections()
+            self._refresh_browse()
+        dialog.connect("response", response)
+        dialog.present()
+
+    def _delete_collection(self, name: str) -> None:
+        dialog = Adw.MessageDialog.new(self, "Delete collection?",
+            f'Remove “{name}” from Lingo? Image files will remain in {self.cfg.collections[name].path}.')
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("delete", "Delete")
+        dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        def response(_dialog, action):
+            if action != "delete":
+                return
+            try:
+                remove_collection(self.cfg, self.state, name)
+                self.cfg.save()
+                self.state.save()
+            except (ValueError, OSError) as e:
+                self._toast(str(e))
+                return
+            self._refresh_collections()
+            self._refresh_browse()
+        dialog.connect("response", response)
+        dialog.present()
 
     # ---------- browse tab ----------
 

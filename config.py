@@ -130,11 +130,15 @@ class Config:
             }),
         ]
         for name, coll in self.collections.items():
-            sections.append((f"collections.{name}", {
+            sections.append((f"collections.{json.dumps(name, ensure_ascii=False)}", {
                 "path": _contract_home(coll.path),
             }))
         body = "# Lingo configuration.\n\n" + _dump_toml(sections)
-        (config_dir() / "config.toml").write_text(body)
+        config_dir().mkdir(parents=True, exist_ok=True)
+        target = config_dir() / "config.toml"
+        temporary = target.with_suffix(".toml.tmp")
+        temporary.write_text(body)
+        temporary.replace(target)
 
 
 def _contract_home(p: Path) -> str:
@@ -153,7 +157,7 @@ def _toml_value(v) -> str:
     if isinstance(v, int):
         return str(v)
     if isinstance(v, str):
-        return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        return json.dumps(v, ensure_ascii=False)
     raise TypeError(f"Cannot serialize {type(v).__name__}")
 
 
